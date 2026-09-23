@@ -14,6 +14,7 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 ACCESS_TOKEN = os.environ["ACCESS_TOKEN"]
 MERCHANT_ID = os.environ["MERCHANT_ID"]
 ADMIN_IDS = [int(x) for x in os.environ.get("ADMIN_IDS", "6743070898").split(",")]
+# Оплата через Telegram Stars — платёжный провайдер не нужен
 
 # Игровые настройки
 CLICK_REWARD = 150          # базовая награда за клик
@@ -40,6 +41,7 @@ SHOP_ITEMS = {
 # Ежедневная награда за клики
 DAILY_REWARDS = [100000, 50000, 30000, 20000, 10000, 5000, 5000, 5000, 5000, 5000]
 
+
 # Магазин за Telegram Stars
 STARS_SHOP = {
     "paper_10k":    {"label": "10 000 бумаги",        "amount": 10000,   "stars": 25},
@@ -48,7 +50,6 @@ STARS_SHOP = {
     "paper_500k":   {"label": "500 000 бумаги",      "amount": 500000,  "stars": 399},
     "paper_1000k":  {"label": "1 000 000 бумаги",    "amount": 1000000, "stars": 699},
 }
-
 
 API_BASE = "https://paper-scroll.online/developer.php"
 
@@ -1367,7 +1368,7 @@ async def cb_buy_paper(cb: types.CallbackQuery):
     ])
     await cb.answer()
     await cb.message.edit_text(
-        "💳 Покупка бумаги за Telegram Stars\n\n"
+        "⭐ Покупка бумаги за Telegram Stars\n\n"
         "Оплата звёздами прямо в Telegram. "
         "Бумага зачисляется автоматически после оплаты.",
         reply_markup=kb
@@ -1375,7 +1376,7 @@ async def cb_buy_paper(cb: types.CallbackQuery):
 
 
 @dp.callback_query(F.data.startswith("stars_"))
-async def cb_stars_pay(cb: types.CallbackQuery):
+async def cb_stars_buy(cb: types.CallbackQuery):
     item_key = cb.data[6:]
     if item_key not in STARS_SHOP:
         await cb.answer("Товар не найден", show_alert=True)
@@ -1389,7 +1390,7 @@ async def cb_stars_pay(cb: types.CallbackQuery):
     await cb.message.answer_invoice(
         title=f"Покупка: {item['label']}",
         description=f"Зачисление {item['amount']} бумаги на баланс в боте",
-        payload=f"stars_{item_key}_{cb.from_user.id}",
+        payload=f"paper_{item_key}_{cb.from_user.id}",
         currency="XTR",
         prices=[types.LabeledPrice(label=item['label'], amount=item['stars'])],
     )
@@ -1404,7 +1405,7 @@ async def pre_checkout(query: types.PreCheckoutQuery):
 async def on_success_payment(message: types.Message):
     payload = message.successful_payment.invoice_payload
     parts = payload.split("_")
-    if not parts or parts[0] != "stars":
+    if not parts or parts[0] != "paper":
         return
     tg_id = int(parts[-1])
     item_key = "_".join(parts[1:-1])
@@ -1414,19 +1415,16 @@ async def on_success_payment(message: types.Message):
     user = get_user(tg_id)
     if user:
         update_user(tg_id, balance=user['balance'] + amount)
-        new_bal = user['balance'] + amount
     else:
         create_user(tg_id, "—")
         update_user(tg_id, balance=amount)
-        new_bal = amount
     await message.answer(
         f"✅ Оплата прошла успешно!\n"
         f"🎁 Зачислено: {amount} бумаги\n"
-        f"💰 Ваш новый баланс: {new_bal}"
+        f"💰 Ваш новый баланс: {(user['balance'] if user else 0) + amount}"
     )
 
 
-@dp.callback_query(F.data == "back_to_main")
 async def cb_back_to_main(cb: types.CallbackQuery):
     user = get_user(cb.from_user.id)
     if not user:
@@ -1436,7 +1434,7 @@ async def cb_back_to_main(cb: types.CallbackQuery):
     kb = admin_keyboard() if is_admin(cb.from_user.id) else main_keyboard()
     await cb.answer()
     await cb.message.edit_text(
-        "👇 Выбери действие:",
+        f"👇 Выбери действие:",
         reply_markup=kb
     )
 
@@ -1456,9 +1454,28 @@ async def fallback_message(message: types.Message):
     )
 
 
+
+# ================ KEEP ALIVE (24/7) ================
+async def keep_alive():
+    """Мини-веб-сервер, чтобы Render не усыплял бота."""
+    from aiohttp import web
+    app = web.Application()
+    async def health(request):
+        return web.Response(text="OK", status=200)
+    app.router.add_get("/", health)
+    app.router.add_get("/health", health)
+    port = int(os.environ.get("PORT", 10000))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"Keep-alive сервер запущен на порту {port}")
+
+
 async def main():
     # Запускаем фоновый планировщик авто-выдачи наград
     asyncio.create_task(daily_reward_scheduler())
+    asyncio.create_task(keep_alive())
     print("Бот запущен!")
     await dp.start_polling(bot)
 
