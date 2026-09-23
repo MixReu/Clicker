@@ -14,7 +14,6 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 ACCESS_TOKEN = os.environ["ACCESS_TOKEN"]
 MERCHANT_ID = os.environ["MERCHANT_ID"]
 ADMIN_IDS = [int(x) for x in os.environ.get("ADMIN_IDS", "6743070898").split(",")]
-PAYMENTS_TOKEN = os.environ.get("PAYMENTS_TOKEN", "")
 
 # Игровые настройки
 CLICK_REWARD = 150          # базовая награда за клик
@@ -41,14 +40,15 @@ SHOP_ITEMS = {
 # Ежедневная награда за клики
 DAILY_REWARDS = [100000, 50000, 30000, 20000, 10000, 5000, 5000, 5000, 5000, 5000]
 
-# Магазин за рубли (Telegram Payments)
-RUBLE_SHOP = {
-    "rub1": {"name": "💰 10 000 бумаги", "price": 49, "paper": 10000},
-    "rub2": {"name": "💰 50 000 бумаги", "price": 199, "paper": 50000},
-    "rub3": {"name": "💰 100 000 бумаги", "price": 349, "paper": 100000},
-    "rub4": {"name": "💰 500 000 бумаги", "price": 1499, "paper": 500000},
-    "rub5": {"name": "💰 1 000 000 бумаги", "price": 2499, "paper": 1000000},
+# Магазин за Telegram Stars
+STARS_SHOP = {
+    "paper_10k":    {"label": "10 000 бумаги",        "amount": 10000,   "stars": 25},
+    "paper_50k":    {"label": "50 000 бумаги",        "amount": 50000,   "stars": 75},
+    "paper_100k":   {"label": "100 000 бумаги",      "amount": 100000,  "stars": 149},
+    "paper_500k":   {"label": "500 000 бумаги",      "amount": 500000,  "stars": 399},
+    "paper_1000k":  {"label": "1 000 000 бумаги",    "amount": 1000000, "stars": 699},
 }
+
 
 API_BASE = "https://paper-scroll.online/developer.php"
 
@@ -301,7 +301,7 @@ def main_keyboard():
         [InlineKeyboardButton(text="🔗 Реф. ссылка", callback_data="reflink"),
          InlineKeyboardButton(text="🎁 Промокод", callback_data="promo")],
         [InlineKeyboardButton(text="🔍 Мой PaperScroll ID", callback_data="mypaperid")],
-        [InlineKeyboardButton(text="💳 Купить бумагу", callback_data="rubleshop")],
+        [InlineKeyboardButton(text="💳 Купить бумагу", callback_data="buy_paper")],
     ])
 
 def admin_keyboard():
@@ -1347,97 +1347,97 @@ async def daily_reward_scheduler():
 
 
 
-
-# --- МАГАЗИН ЗА РУБЛИ (Telegram Payments) ---
-@dp.callback_query(F.data == "rubleshop")
-async def cb_rubleshop(cb: types.CallbackQuery):
+# --- МАГАЗИН ЗА TELEGRAM STARS ---
+@dp.callback_query(F.data == "buy_paper")
+async def cb_buy_paper(cb: types.CallbackQuery):
     user = get_user(cb.from_user.id)
     if not user:
         await cb.answer("Сначала /start", show_alert=True)
         return
-    if not PAYMENTS_TOKEN:
-        await cb.answer("Магазин временно недоступен", show_alert=True)
-        return
-    kb = admin_keyboard() if is_admin(cb.from_user.id) else main_keyboard()
-    text = "💳 Магазин за рубли\n\n"
-    text += f"💰 Ваш баланс: {user['balance']} бумаги\n\n"
-    text += "Пакеты:\n\n"
-    for key, item in RUBLE_SHOP.items():
-        text += f"{item['name']} — {item['price']}₽\n"
-    text += "\nНажмите на пакет для оплаты:"
-    # Кнопки пакетов
-    buttons = []
-    for key, item in RUBLE_SHOP.items():
-        buttons.append([InlineKeyboardButton(
-            text=f"{item['name']} — {item['price']}₽",
-            callback_data=f"buyrub_{key}"
-        )])
-    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="balance")])
-    shop_kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    kb = InlineKeyboardMarkup(inline_keyboard=[])
+    for key, item in STARS_SHOP.items():
+        kb.inline_keyboard.append([
+            InlineKeyboardButton(
+                text=f"{item['label']} — {item['stars']} ⭐",
+                callback_data=f"stars_{key}"
+            )
+        ])
+    kb.inline_keyboard.append([
+        InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_main")
+    ])
     await cb.answer()
-    await cb.message.edit_text(text, reply_markup=shop_kb)
+    await cb.message.edit_text(
+        "💳 Покупка бумаги за Telegram Stars\n\n"
+        "Оплата звёздами прямо в Telegram. "
+        "Бумага зачисляется автоматически после оплаты.",
+        reply_markup=kb
+    )
 
 
-@dp.callback_query(F.data.startswith("buyrub_"))
-async def cb_buyrub(cb: types.CallbackQuery):
+@dp.callback_query(F.data.startswith("stars_"))
+async def cb_stars_pay(cb: types.CallbackQuery):
+    item_key = cb.data[6:]
+    if item_key not in STARS_SHOP:
+        await cb.answer("Товар не найден", show_alert=True)
+        return
+    item = STARS_SHOP[item_key]
     user = get_user(cb.from_user.id)
     if not user:
         await cb.answer("Сначала /start", show_alert=True)
         return
-    if not PAYMENTS_TOKEN:
-        await cb.answer("Магазин временно недоступен", show_alert=True)
-        return
-    item_key = cb.data.replace("buyrub_", "")
-    if item_key not in RUBLE_SHOP:
-        await cb.answer("Пакет не найден", show_alert=True)
-        return
-    item = RUBLE_SHOP[item_key]
     await cb.answer()
-    await bot.send_invoice(
-        chat_id=cb.message.chat.id,
-        title=item["name"],
-        description=f"Покупка {item['paper']:,} бумаги в кликере".replace(",", " "),
-        payload=f"buyrub_{item_key}_{cb.from_user.id}",
-        provider_token=PAYMENTS_TOKEN,
-        currency="RUB",
-        prices=[types.LabeledPrice(label=item["name"], amount=item["price"] * 100)],
-        start_parameter=f"buy-{item_key}",
+    await cb.message.answer_invoice(
+        title=f"Покупка: {item['label']}",
+        description=f"Зачисление {item['amount']} бумаги на баланс в боте",
+        payload=f"stars_{item_key}_{cb.from_user.id}",
+        currency="XTR",
+        prices=[types.LabeledPrice(label=item['label'], amount=item['stars'])],
     )
 
 
 @dp.pre_checkout_query()
-async def pre_checkout_handler(query: types.PreCheckoutQuery):
-    await bot.answer_pre_checkout_query(query.id, ok=True)
+async def pre_checkout(query: types.PreCheckoutQuery):
+    await query.answer(ok=True)
 
 
 @dp.message(F.successful_payment)
-async def successful_payment_handler(message: types.Message):
-    payment = message.successful_payment
-    payload = payment.invoice_payload
+async def on_success_payment(message: types.Message):
+    payload = message.successful_payment.invoice_payload
     parts = payload.split("_")
-    if len(parts) < 3 or parts[0] != "buyrub":
+    if not parts or parts[0] != "stars":
         return
-    item_key = parts[1]
-    if item_key not in RUBLE_SHOP:
+    tg_id = int(parts[-1])
+    item_key = "_".join(parts[1:-1])
+    if item_key not in STARS_SHOP:
         return
-    item = RUBLE_SHOP[item_key]
-    user = get_user(message.from_user.id)
-    if not user:
-        return
-    new_balance = user["balance"] + item["paper"]
-    update_user(message.from_user.id, balance=new_balance)
-    # Лог покупки в shop_purchases
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("INSERT INTO shop_purchases (id, tg_id, item_key, price, created_at) VALUES (?, ?, ?, ?, ?)",
-              (uuid.uuid4().hex, message.from_user.id, item_key, item["price"], time.time()))
-    conn.commit()
-    conn.close()
+    amount = STARS_SHOP[item_key]["amount"]
+    user = get_user(tg_id)
+    if user:
+        update_user(tg_id, balance=user['balance'] + amount)
+        new_bal = user['balance'] + amount
+    else:
+        create_user(tg_id, "—")
+        update_user(tg_id, balance=amount)
+        new_bal = amount
     await message.answer(
-        f"✅ Оплата получена!\n"
-        f"💳 Списано: {item['price']}₽\n"
-        f"💰 Начислено: {item['paper']:,} бумаги\n".replace(",", " ") +
-        f"💵 Ваш баланс: {new_balance:,}".replace(",", " ")
+        f"✅ Оплата прошла успешно!\n"
+        f"🎁 Зачислено: {amount} бумаги\n"
+        f"💰 Ваш новый баланс: {new_bal}"
+    )
+
+
+@dp.callback_query(F.data == "back_to_main")
+async def cb_back_to_main(cb: types.CallbackQuery):
+    user = get_user(cb.from_user.id)
+    if not user:
+        await cb.answer("Сначала /start", show_alert=True)
+        return
+    user = regen_energy(user)
+    kb = admin_keyboard() if is_admin(cb.from_user.id) else main_keyboard()
+    await cb.answer()
+    await cb.message.edit_text(
+        "👇 Выбери действие:",
+        reply_markup=kb
     )
 
 
@@ -1451,8 +1451,7 @@ async def fallback_message(message: types.Message):
         "• купить boost15 — покупка в магазине\n"
         "• промокод КОД — активировать промокод\n"
         "• paperid 136 — привязать PaperScroll ID\n"
-        "• вывод 1000 — вывести бумагу\n"
-        "• 💳 Кнопка «Купить бумагу» — оплата рублями",
+        "• вывод 1000 — вывести бумагу",
         reply_markup=kb
     )
 
